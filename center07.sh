@@ -3,15 +3,15 @@
 # =============================================================================
 # Script Name : center07.sh
 # Description : Interactive tool using `dialog` and `nmcli` to add all IPs
-#               (including network and broadcast) from a CIDR range to a
-#               selected network interface on RHEL-based systems.
+#               (including network and broadcast) from a CIDR range as /32
+#               to a selected network interface on RHEL-based systems.
 #
 # URL         : https://github.com/gothickitty93/center07
-# Author      : gothickitty93
+# Author      : gothickitty93 (modified)
 # License     : CC BY-SA 4.0 
-# Version     : 25.04.2
+# Version     : 25.04.4
 # =============================================================================
-#
+
 # Ensure required commands are present
 for cmd in dialog nmcli ipcalc; do
     if ! command -v $cmd >/dev/null 2>&1; then
@@ -22,7 +22,7 @@ done
 
 TMPFILE=$(mktemp)
 
-# Get list of available interfaces (excluding loopback and disconnected)
+# Get list of available interfaces (excluding loopback)
 interfaces=()
 while IFS= read -r line; do
     dev=$(echo "$line" | awk '{print $1}')
@@ -38,7 +38,7 @@ fi
 
 # Use dialog to select interface
 dialog --clear --title "Select Network Interface" \
-    --menu "Choose an interface to add IPs to:" 15 50 6 \
+    --menu "Choose an interface to add IPs to. The interface and profile name MUST match!" 15 50 6 \
     "${interfaces[@]}" 2>"$TMPFILE"
 
 retval=$?
@@ -50,32 +50,13 @@ if [[ $retval -ne 0 || -z "$iface" ]]; then
     exit 1
 fi
 
-# Get connection name associated with the selected interface
-conn_candidates=($(nmcli -t -f NAME,DEVICE connection show | grep ":$iface\$" | cut -d: -f1))
-
-if [[ ${#conn_candidates[@]} -eq 0 ]]; then
-    dialog --msgbox "Could not find any connection profile for interface '$iface'." 6 60
-    exit 1
-elif [[ ${#conn_candidates[@]} -eq 1 ]]; then
-    conn_name="${conn_candidates[0]}"
-else
-    # If multiple connection profiles match, let user select
-    dialog --menu "Multiple connection profiles found for $iface. Choose one:" 15 50 5 \
-        "${conn_candidates[@]/%/ $iface}" 2>"$TMPFILE"
-    conn_name=$(<"$TMPFILE")
-    rm -f "$TMPFILE"
-    if [[ -z "$conn_name" ]]; then
-        dialog --msgbox "No connection selected." 6 40
-        exit 1
-    fi
-fi
-
 # Ask for CIDR input
+TMPFILE=$(mktemp)
 dialog --inputbox "Enter the CIDR IP range to add (e.g., 192.168.0.0/30):" 8 50 2>"$TMPFILE"
 cidr=$(<"$TMPFILE")
 rm -f "$TMPFILE"
 
-# Validate CIDR input
+# Validate input
 if [[ ! "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
     dialog --msgbox "Invalid CIDR format." 6 40
     exit 1
@@ -83,7 +64,6 @@ fi
 
 # Use ipcalc to get network/broadcast
 eval $(ipcalc -n -b "$cidr")  # sets NETWORK and BROADCAST
-IFS=/ read -r ip prefix <<< "$cidr"
 
 # IP conversion helpers
 ip_to_int() {
@@ -100,21 +80,18 @@ int_to_ip() {
 start=$(ip_to_int "$NETWORK")
 end=$(ip_to_int "$BROADCAST")
 
-# Add all IPs including network and broadcast
+# Add all IPs including network and broadcast as /32
 log=""
 for ((i = start; i <= end; i++)); do
     ip_addr=$(int_to_ip "$i")
-    log+="Adding $ip_addr/32 to connection '$conn_name'\n"
-    nmcli connection modify "$conn_name" +ipv4.addresses "$ip_addr/32"
+    log+="Adding $ip_addr/32 to $iface\n"
+    nmcli connection modify "$iface" +ipv4.addresses "$ip_addr/32"
 done
 
-# Ensure IPv4 method is manual
-nmcli connection modify "$conn_name" ipv4.method manual
-
 # Apply changes
-nmcli connection down "$conn_name" && nmcli connection up "$conn_name"
+nmcli connection down "$iface" && nmcli connection up "$iface"
 
 # Show result
-dialog --msgbox "All IPs have been added to $iface (connection: $conn_name):\n\n$log" 20 70
+dialog --msgbox "All IPs have been added as /32 to $iface:\n\n$log" 20 70
 
 clear
