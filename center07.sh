@@ -9,7 +9,7 @@
 # URL         : https://github.com/gothickitty93/center07
 # Author      : gothickitty93
 # License     : CC BY-SA 4.0 
-# Version     : 25.04
+# Version     : 25.04.2
 # =============================================================================
 #
 # Ensure required commands are present
@@ -50,12 +50,24 @@ if [[ $retval -ne 0 || -z "$iface" ]]; then
     exit 1
 fi
 
-# Resolve the connection name associated with the selected interface
-conn_name=$(nmcli -t -f NAME,DEVICE connection show | grep ":$iface\$" | cut -d: -f1 | head -n1)
+# Get connection name associated with the selected interface
+conn_candidates=($(nmcli -t -f NAME,DEVICE connection show | grep ":$iface\$" | cut -d: -f1))
 
-if [[ -z "$conn_name" ]]; then
-    dialog --msgbox "Could not find a connection profile for interface '$iface'." 6 60
+if [[ ${#conn_candidates[@]} -eq 0 ]]; then
+    dialog --msgbox "Could not find any connection profile for interface '$iface'." 6 60
     exit 1
+elif [[ ${#conn_candidates[@]} -eq 1 ]]; then
+    conn_name="${conn_candidates[0]}"
+else
+    # If multiple connection profiles match, let user select
+    dialog --menu "Multiple connection profiles found for $iface. Choose one:" 15 50 5 \
+        "${conn_candidates[@]/%/ $iface}" 2>"$TMPFILE"
+    conn_name=$(<"$TMPFILE")
+    rm -f "$TMPFILE"
+    if [[ -z "$conn_name" ]]; then
+        dialog --msgbox "No connection selected." 6 40
+        exit 1
+    fi
 fi
 
 # Ask for CIDR input
@@ -92,8 +104,8 @@ end=$(ip_to_int "$BROADCAST")
 log=""
 for ((i = start; i <= end; i++)); do
     ip_addr=$(int_to_ip "$i")
-    log+="Adding $ip_addr/$prefix to connection '$conn_name'\n"
-    nmcli connection modify "$conn_name" +ipv4.addresses "$ip_addr/$prefix"
+    log+="Adding $ip_addr/32 to connection '$conn_name'\n"
+    nmcli connection modify "$conn_name" +ipv4.addresses "$ip_addr/32"
 done
 
 # Ensure IPv4 method is manual
