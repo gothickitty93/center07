@@ -11,7 +11,7 @@
 # License     : CC BY-SA 4.0 
 # Version     : 25.04
 # =============================================================================
-
+#
 # Ensure required commands are present
 for cmd in dialog nmcli ipcalc; do
     if ! command -v $cmd >/dev/null 2>&1; then
@@ -50,12 +50,20 @@ if [[ $retval -ne 0 || -z "$iface" ]]; then
     exit 1
 fi
 
+# Resolve the connection name associated with the selected interface
+conn_name=$(nmcli -t -f NAME,DEVICE connection show | grep ":$iface\$" | cut -d: -f1 | head -n1)
+
+if [[ -z "$conn_name" ]]; then
+    dialog --msgbox "Could not find a connection profile for interface '$iface'." 6 60
+    exit 1
+fi
+
 # Ask for CIDR input
 dialog --inputbox "Enter the CIDR IP range to add (e.g., 192.168.0.0/30):" 8 50 2>"$TMPFILE"
 cidr=$(<"$TMPFILE")
 rm -f "$TMPFILE"
 
-# Validate input
+# Validate CIDR input
 if [[ ! "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
     dialog --msgbox "Invalid CIDR format." 6 40
     exit 1
@@ -84,14 +92,17 @@ end=$(ip_to_int "$BROADCAST")
 log=""
 for ((i = start; i <= end; i++)); do
     ip_addr=$(int_to_ip "$i")
-    log+="Adding $ip_addr/$prefix to $iface\n"
-    nmcli connection modify "$iface" +ipv4.addresses "$ip_addr/$prefix"
+    log+="Adding $ip_addr/$prefix to connection '$conn_name'\n"
+    nmcli connection modify "$conn_name" +ipv4.addresses "$ip_addr/$prefix"
 done
 
+# Ensure IPv4 method is manual
+nmcli connection modify "$conn_name" ipv4.method manual
+
 # Apply changes
-nmcli connection down "$iface" && nmcli connection up "$iface"
+nmcli connection down "$conn_name" && nmcli connection up "$conn_name"
 
 # Show result
-dialog --msgbox "All IPs have been added to $iface:\n\n$log" 15 60
+dialog --msgbox "All IPs have been added to $iface (connection: $conn_name):\n\n$log" 20 70
 
 clear
